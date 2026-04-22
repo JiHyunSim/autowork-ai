@@ -1,0 +1,23 @@
+{
+  "name": "autowork-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AutoWork AI - AI 업무 자동화 SaaS",
+  "packageManager": "pnpm@9.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --parallel dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev:api": "pnpm --filter api dev",
+    "build": "pnpm --parallel build",
+    "lint": "pnpm --parallel lint",
+    "typecheck": "pnpm --parallel typecheck",
+    "test": "pnpm --parallel test"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

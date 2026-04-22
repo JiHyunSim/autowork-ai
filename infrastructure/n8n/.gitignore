@@ -1,0 +1,9 @@
+# 실제 환경 설정 파일 (절대 커밋 금지)
+.env
+
+# n8n 로컬 데이터
+workflows/*.json
+!workflows/.gitkeep
+
+# Docker 볼륨 데이터
+data/

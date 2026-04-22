@@ -14,6 +14,8 @@ from src.trend import TrendCollector, TopicSelector, ContentQueue
 from src.content import BlogGenerator, YouTubeGenerator, ReelsGenerator
 from src.upload import TistoryUploader, YouTubeUploader, InstagramUploader
 from src.affiliate import AffiliateLinkInserter
+from src.monitoring import PipelineMonitor
+from src.scheduler import PipelineScheduler
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/pipeline")
@@ -435,3 +437,217 @@ def get_affiliate_stats(
         return inserter.get_post_stats(blog_post_id)
     finally:
         inserter.close()
+
+
+# ------------------------------------------------------------------ #
+# Phase 6: 모니터링, 스케줄링 & E2E 검증 엔드포인트
+# ------------------------------------------------------------------ #
+
+
+class PipelineRunRequest(BaseModel):
+    target_date: Optional[str] = None  # ISO date string, 없으면 오늘
+
+
+@router.post("/monitor/run-daily")
+def run_daily_pipeline(
+    req: PipelineRunRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """전체 일일 파이프라인 1회 실행 — n8n 마스터 스케줄러가 호출
+
+    트렌드 수집 → 주제 선정 → 콘텐츠 생성 → 업로드 → 제휴 링크 삽입 → Slack 알림.
+    pipeline_runs 테이블에 실행 결과 기록.
+    """
+    logger.info("api.monitor.run_daily", date=req.target_date)
+    monitor = PipelineMonitor()
+    run_id = monitor.start_run(target_date=req.target_date)
+
+    errors: list[str] = []
+    stats: dict = {
+        "date": req.target_date or date.today().isoformat(),
+        "blog_generated": 0,
+        "blog_published": 0,
+        "youtube_generated": 0,
+        "youtube_published": 0,
+        "reels_generated": 0,
+        "reels_published": 0,
+        "affiliate_inserted": 0,
+        "errors": [],
+    }
+
+    # 콘텐츠 생성
+    try:
+        blog_results = monitor.run_step_with_retry(
+            "blog_generate",
+            lambda: BlogGenerator().generate_from_queue(
+                target_date=req.target_date, limit=5
+            ),
+        )
+        ok = [r for r in blog_results if "error" not in r]
+        stats["blog_generated"] = len(ok)
+        monitor.record_step(run_id, "blog_generate", success=True, result={"count": len(ok)})
+    except Exception as exc:
+        errors.append(f"blog_generate: {exc}")
+        monitor.record_step(run_id, "blog_generate", success=False, error=str(exc))
+
+    try:
+        yt_results = monitor.run_step_with_retry(
+            "youtube_generate",
+            lambda: YouTubeGenerator().generate_from_queue(
+                target_date=req.target_date, limit=1
+            ),
+        )
+        ok = [r for r in yt_results if "error" not in r]
+        stats["youtube_generated"] = len(ok)
+        monitor.record_step(run_id, "youtube_generate", success=True, result={"count": len(ok)})
+    except Exception as exc:
+        errors.append(f"youtube_generate: {exc}")
+        monitor.record_step(run_id, "youtube_generate", success=False, error=str(exc))
+
+    try:
+        reels_results = monitor.run_step_with_retry(
+            "reels_generate",
+            lambda: ReelsGenerator().generate_from_queue(
+                target_date=req.target_date, limit=1
+            ),
+        )
+        ok = [r for r in reels_results if "error" not in r]
+        stats["reels_generated"] = len(ok)
+        monitor.record_step(run_id, "reels_generate", success=True, result={"count": len(ok)})
+    except Exception as exc:
+        errors.append(f"reels_generate: {exc}")
+        monitor.record_step(run_id, "reels_generate", success=False, error=str(exc))
+
+    stats["errors"] = errors
+    monitor.finish_run(run_id, stats)
+    monitor.close()
+
+    return {"run_id": run_id, "status": "success" if not errors else "partial", **stats}
+
+
+@router.get("/monitor/stats")
+def get_daily_stats(
+    target_date: Optional[str] = None,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """일별 파이프라인 실행 통계 조회"""
+    monitor = PipelineMonitor()
+    return monitor.get_daily_stats(target_date=target_date)
+
+
+@router.get("/monitor/health")
+def pipeline_health(
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """파이프라인 헬스 체크 — Supabase 연결 & 최근 콘텐츠 생성 여부"""
+    monitor = PipelineMonitor()
+    return monitor.get_pipeline_health()
+
+
+@router.get("/schedule")
+def get_schedule(
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """24시간 자동 발행 스케줄 목록 반환 (KST 기준)"""
+    scheduler = PipelineScheduler(
+        pipeline_base_url=os.getenv("PIPELINE_BASE_URL", "http://localhost:8000"),
+        api_token=PIPELINE_API_TOKEN,
+    )
+    schedule = scheduler.get_schedule()
+    return {"schedule": schedule, "count": len(schedule)}
+
+
+class TriggerJobRequest(BaseModel):
+    job_id: str
+
+
+@router.post("/schedule/trigger")
+def schedule_trigger_job(
+    req: TriggerJobRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """특정 스케줄 job 즉시 수동 실행 (디버깅/테스트용)"""
+    logger.info("api.schedule.trigger", job_id=req.job_id)
+    scheduler = PipelineScheduler(
+        pipeline_base_url=os.getenv("PIPELINE_BASE_URL", "http://localhost:8000"),
+        api_token=PIPELINE_API_TOKEN,
+    )
+    return scheduler.trigger_job(req.job_id)
+
+
+class E2ERunRequest(BaseModel):
+    target_date: Optional[str] = None
+
+
+@router.post("/e2e/run")
+def e2e_run_pipeline(
+    req: E2ERunRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """E2E 전체 파이프라인 검증 — 트렌드 수집 → 콘텐츠 생성 → 업로드 순서 실행.
+
+    사람 개입 없이 완전 자동화 흐름을 검증한다.
+    각 단계 결과를 모니터링에 기록하고 최종 Slack 요약 발송.
+    """
+    logger.info("api.e2e.run", target_date=req.target_date)
+    monitor = PipelineMonitor()
+    scheduler = PipelineScheduler(
+        pipeline_base_url=os.getenv("PIPELINE_BASE_URL", "http://localhost:8000"),
+        api_token=PIPELINE_API_TOKEN,
+    )
+    run_id = monitor.start_run(target_date=req.target_date)
+
+    steps = [
+        ("trend_collect", "/api/pipeline/trends/collect",
+         {"sources": ["google_trends", "naver_datalab", "rss"], "limit": 20}),
+        ("blog_generate", "/api/pipeline/content/generate-blog",
+         {"limit": 5, **({"target_date": req.target_date} if req.target_date else {})}),
+        ("youtube_generate", "/api/pipeline/content/generate-youtube",
+         {"limit": 1, **({"target_date": req.target_date} if req.target_date else {})}),
+        ("reels_generate", "/api/pipeline/content/generate-reels",
+         {"limit": 1, **({"target_date": req.target_date} if req.target_date else {})}),
+        ("blog_upload", "/api/pipeline/upload/blog", {"limit": 5}),
+        ("youtube_upload", "/api/pipeline/upload/youtube", {"limit": 1}),
+        ("reels_upload", "/api/pipeline/upload/reels", {"limit": 1}),
+    ]
+
+    step_results: dict[str, dict] = {}
+    errors: list[str] = []
+
+    for step_id, path, payload in steps:
+        try:
+            result = monitor.run_step_with_retry(step_id, scheduler._call, path, payload)
+            step_results[step_id] = result
+            monitor.record_step(run_id, step_id, success=True, result=result)
+        except Exception as exc:
+            errors.append(f"{step_id}: {exc}")
+            step_results[step_id] = {"error": str(exc)}
+            monitor.record_step(run_id, step_id, success=False, error=str(exc))
+            logger.error("api.e2e.step_failed", step=step_id, error=str(exc))
+
+    blog_r = step_results.get("blog_generate", {})
+    yt_r = step_results.get("youtube_generate", {})
+    reels_r = step_results.get("reels_generate", {})
+
+    stats = {
+        "date": req.target_date or date.today().isoformat(),
+        "run_id": run_id,
+        "blog_generated": blog_r.get("generated", 0),
+        "blog_published": step_results.get("blog_upload", {}).get("uploaded", 0),
+        "blog_failed": blog_r.get("failed", 0),
+        "youtube_generated": yt_r.get("generated", 0),
+        "youtube_published": step_results.get("youtube_upload", {}).get("uploaded", 0),
+        "reels_generated": reels_r.get("generated", 0),
+        "reels_published": step_results.get("reels_upload", {}).get("uploaded", 0),
+        "errors": errors,
+    }
+
+    monitor.finish_run(run_id=run_id, stats=stats)
+    monitor.close()
+
+    return {
+        "run_id": run_id,
+        "success": len(errors) == 0,
+        "stats": stats,
+        "step_results": step_results,
+    }

@@ -60,8 +60,8 @@ class PipelineRunner:
         try:
             # Phase 1: 트렌드 수집
             trends = self._monitor.run_step_with_retry(
-                step_name="trend_collect",
-                fn=self._collect_trends,
+                "trend_collect",
+                self._collect_trends,
                 max_retries=2,
             )
             self._monitor.record_step(
@@ -71,8 +71,8 @@ class PipelineRunner:
 
             # Phase 2: 큐 생성
             self._monitor.run_step_with_retry(
-                step_name="queue_build",
-                fn=self._build_queue,
+                "queue_build",
+                self._build_queue,
                 trends,
                 today,
                 max_retries=2,
@@ -81,8 +81,8 @@ class PipelineRunner:
 
             # Phase 3-a: 블로그
             blog_result = self._monitor.run_step_with_retry(
-                step_name="blog_generate",
-                fn=self._generate_and_publish_blog,
+                "blog_generate",
+                self._generate_and_publish_blog,
                 today,
             )
             content_counts["blog_generated"] = blog_result.get("generated", 0)
@@ -95,8 +95,8 @@ class PipelineRunner:
 
             # Phase 3-b: 릴스
             reels_result = self._monitor.run_step_with_retry(
-                step_name="reels_generate",
-                fn=self._generate_and_publish_reels,
+                "reels_generate",
+                self._generate_and_publish_reels,
                 today,
             )
             content_counts["reels_generated"] = reels_result.get("generated", 0)
@@ -108,8 +108,8 @@ class PipelineRunner:
             # Phase 3-c: 유튜브 (월/수/금만)
             if run_youtube:
                 yt_result = self._monitor.run_step_with_retry(
-                    step_name="youtube_generate",
-                    fn=self._generate_and_publish_youtube,
+                    "youtube_generate",
+                    self._generate_and_publish_youtube,
                     today,
                 )
                 content_counts["youtube_generated"] = yt_result.get("generated", 0)

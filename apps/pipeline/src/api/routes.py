@@ -11,6 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from src.trend import TrendCollector, TopicSelector, ContentQueue
+from src.content import BlogGenerator, YouTubeGenerator, ReelsGenerator
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/pipeline")
@@ -43,6 +44,20 @@ class TopicQueueRequest(BaseModel):
     youtube_count: int = 1
     reels_count: int = 1
     target_date: Optional[str] = None  # ISO date string
+
+
+class ContentGenerateRequest(BaseModel):
+    target_date: Optional[str] = None  # ISO date string, 없으면 오늘
+    limit: Optional[int] = None        # 최대 생성 수 (없으면 기본값 사용)
+
+
+class ContentGenerateSingleRequest(BaseModel):
+    title: str
+    primary_keyword: str
+    seo_keywords: list[str] = []
+    angle: str = ""
+    target_audience: str = ""
+    queue_id: str = ""
 
 
 # ------------------------------------------------------------------ #
@@ -149,3 +164,140 @@ def get_pending_queue(
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "autowork-pipeline"}
+
+
+# ------------------------------------------------------------------ #
+# Phase 3: AI 콘텐츠 생성 엔드포인트 (n8n 워크플로우 3단계)
+# ------------------------------------------------------------------ #
+
+
+@router.post("/content/generate-blog")
+def generate_blog(
+    req: ContentGenerateRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """블로그 포스트 자동 생성 — n8n 콘텐츠 생성 워크플로우
+
+    content_queue 테이블의 pending blog 항목을 읽어 Claude API로 생성 후 blog_posts에 저장.
+    """
+    logger.info("api.content.generate_blog", date=req.target_date, limit=req.limit)
+    generator = BlogGenerator()
+    posts = generator.generate_from_queue(
+        target_date=req.target_date,
+        limit=req.limit or 5,
+    )
+    success = [p for p in posts if "error" not in p]
+    failed = [p for p in posts if "error" in p]
+    return {
+        "generated": len(success),
+        "failed": len(failed),
+        "posts": success,
+        "errors": failed,
+    }
+
+
+@router.post("/content/generate-blog/single")
+def generate_blog_single(
+    req: ContentGenerateSingleRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """단일 블로그 포스트 생성 (큐 없이 직접 호출)"""
+    logger.info("api.content.generate_blog_single", title=req.title)
+    generator = BlogGenerator()
+    post = generator.generate_single(
+        title=req.title,
+        primary_keyword=req.primary_keyword,
+        seo_keywords=req.seo_keywords,
+        angle=req.angle,
+        target_audience=req.target_audience,
+        queue_id=req.queue_id,
+    )
+    return post
+
+
+@router.post("/content/generate-youtube")
+def generate_youtube(
+    req: ContentGenerateRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """유튜브 스크립트 + 메타데이터 자동 생성 — n8n 콘텐츠 생성 워크플로우
+
+    content_queue 테이블의 pending youtube 항목을 읽어 Claude API로 생성 후 youtube_videos에 저장.
+    """
+    logger.info("api.content.generate_youtube", date=req.target_date, limit=req.limit)
+    generator = YouTubeGenerator()
+    videos = generator.generate_from_queue(
+        target_date=req.target_date,
+        limit=req.limit or 1,
+    )
+    success = [v for v in videos if "error" not in v]
+    failed = [v for v in videos if "error" in v]
+    return {
+        "generated": len(success),
+        "failed": len(failed),
+        "videos": success,
+        "errors": failed,
+    }
+
+
+@router.post("/content/generate-youtube/single")
+def generate_youtube_single(
+    req: ContentGenerateSingleRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """단일 유튜브 스크립트 생성 (큐 없이 직접 호출)"""
+    logger.info("api.content.generate_youtube_single", title=req.title)
+    generator = YouTubeGenerator()
+    video = generator.generate_single(
+        title=req.title,
+        primary_keyword=req.primary_keyword,
+        seo_keywords=req.seo_keywords,
+        angle=req.angle,
+        target_audience=req.target_audience,
+        queue_id=req.queue_id,
+    )
+    return video
+
+
+@router.post("/content/generate-reels")
+def generate_reels(
+    req: ContentGenerateRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """릴스 캡션 + 대본 자동 생성 — n8n 콘텐츠 생성 워크플로우
+
+    content_queue 테이블의 pending reels 항목을 읽어 Claude API로 생성 후 instagram_reels에 저장.
+    """
+    logger.info("api.content.generate_reels", date=req.target_date, limit=req.limit)
+    generator = ReelsGenerator()
+    reels = generator.generate_from_queue(
+        target_date=req.target_date,
+        limit=req.limit or 1,
+    )
+    success = [r for r in reels if "error" not in r]
+    failed = [r for r in reels if "error" in r]
+    return {
+        "generated": len(success),
+        "failed": len(failed),
+        "reels": success,
+        "errors": failed,
+    }
+
+
+@router.post("/content/generate-reels/single")
+def generate_reels_single(
+    req: ContentGenerateSingleRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """단일 릴스 캡션 + 대본 생성 (큐 없이 직접 호출)"""
+    logger.info("api.content.generate_reels_single", title=req.title)
+    generator = ReelsGenerator()
+    reel = generator.generate_single(
+        title=req.title,
+        primary_keyword=req.primary_keyword,
+        seo_keywords=req.seo_keywords,
+        angle=req.angle,
+        target_audience=req.target_audience,
+        queue_id=req.queue_id,
+    )
+    return reel

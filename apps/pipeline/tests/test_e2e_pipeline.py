@@ -79,12 +79,12 @@ class TestPipelineMonitorLifecycle:
     def test_record_step_failure_sends_alert(self, monitor):
         run_id = monitor.start_run("2026-04-22")
         monitor.record_step(
-            run_id, "blog_upload", success=False, error="Tistory API error"
+            run_id, "blog_upload", success=False, error="WordPress API error"
         )
         monitor._notifier.notify_error.assert_called_once()
         args = monitor._notifier.notify_error.call_args
         assert args.kwargs["phase"] == "blog_upload"
-        assert "Tistory API error" in args.kwargs["error"]
+        assert "WordPress API error" in args.kwargs["error"]
 
 
 class TestRunStepWithRetry:
@@ -270,3 +270,106 @@ class TestPipelineScheduler:
         job_ids = {item["job_id"] for item in scheduler.get_schedule()}
         required = {"trend_collect", "blog_generate_1", "reels_generate", "youtube_generate"}
         assert required.issubset(job_ids)
+
+
+# ================================================================== #
+# VideoPipeline unit tests (CMP-74)
+# ================================================================== #
+
+
+class TestTTSGenerator:
+    """TTSGenerator — Google Cloud TTS 클라이언트를 mock으로 대체해 단위 검증"""
+
+    def test_clean_script_removes_markdown(self):
+        from src.video.tts_generator import TTSGenerator
+
+        gen = TTSGenerator.__new__(TTSGenerator)
+        gen._voice_name = "ko-KR-Neural2-C"
+        cleaned = gen._clean_script("## 제목\n[인트로] 안녕하세요.  내용입니다.")
+        assert "##" not in cleaned
+        assert "[인트로]" not in cleaned
+        assert "안녕하세요" in cleaned
+
+    def test_split_into_chunks_short_text(self):
+        from src.video.tts_generator import TTSGenerator
+
+        gen = TTSGenerator.__new__(TTSGenerator)
+        short = "안녕하세요."
+        chunks = gen._split_into_chunks(short)
+        assert len(chunks) == 1
+        assert chunks[0] == short
+
+    def test_split_into_chunks_long_text(self):
+        from src.video.tts_generator import TTSGenerator
+
+        gen = TTSGenerator.__new__(TTSGenerator)
+        # 5000자 이상 텍스트 → 여러 청크로 분할
+        long_text = "가나다라마바사아자차카타파하. " * 400
+        chunks = gen._split_into_chunks(long_text)
+        assert len(chunks) > 1
+        for chunk in chunks:
+            assert len(chunk.encode("utf-8")) <= 4800
+
+    def test_estimate_cost_returns_dict(self):
+        from src.video.tts_generator import TTSGenerator
+
+        gen = TTSGenerator.__new__(TTSGenerator)
+        gen._voice_name = "ko-KR-Neural2-C"
+        result = gen.estimate_cost("안녕하세요 " * 100)
+        assert "char_count" in result
+        assert "cost_usd" in result
+        assert result["cost_usd"] >= 0
+
+
+class TestSlideGenerator:
+    """SlideGenerator — 파일 I/O 없이 파싱 로직만 검증"""
+
+    def test_parse_script_extracts_headings(self):
+        from src.video.slide_generator import SlideGenerator
+
+        gen = SlideGenerator.__new__(SlideGenerator)
+        gen._font = None
+        gen._font_size_body = 52
+        gen._font_size_title = 72
+        gen._CHARS_PER_SECOND = 6.5
+        script = "## 도입\n안녕하세요.\n\n## 본론\n내용입니다."
+        specs = gen._parse_script(script)
+        titles = [s for s in specs if s.is_title]
+        bodies = [s for s in specs if not s.is_title]
+        assert len(titles) == 2
+        assert any("도입" in t.text for t in titles)
+        assert len(bodies) >= 1
+
+    def test_duration_scales_with_text_length(self):
+        from src.video.slide_generator import SlideGenerator
+
+        gen = SlideGenerator.__new__(SlideGenerator)
+        gen._CHARS_PER_SECOND = 6.5
+        gen._font = None
+        gen._font_size_body = 52
+        gen._font_size_title = 72
+        short = "짧은 텍스트"
+        long_text = "긴 텍스트입니다. " * 10
+        specs_short = gen._parse_script(short)
+        specs_long = gen._parse_script(long_text)
+        total_short = sum(s.duration_secs for s in specs_short)
+        total_long = sum(s.duration_secs for s in specs_long)
+        assert total_long > total_short
+
+
+class TestVideoPipelineIntegration:
+    """VideoPipeline — dry_run 모드에서 E2E 흐름 검증 (실제 API 호출 없음)"""
+
+    def test_pipeline_runner_dry_run_includes_video_render(self, monitor):
+        """dry_run=True 시 video_rendered 카운트가 stats에 포함됨"""
+        runner = PipelineRunner(monitor=monitor, dry_run=True)
+        # 월요일 (2026-04-20) → YouTube + Video Render 실행
+        stats = runner.run("2026-04-20")
+        assert "video_rendered" in stats
+        assert stats["video_rendered"] >= 0
+
+    def test_pipeline_runner_video_render_skipped_on_tuesday(self, monitor):
+        """화요일은 YouTube 없으므로 video_render도 0"""
+        runner = PipelineRunner(monitor=monitor, dry_run=True)
+        stats = runner.run("2026-04-21")
+        assert stats.get("video_rendered", 0) == 0

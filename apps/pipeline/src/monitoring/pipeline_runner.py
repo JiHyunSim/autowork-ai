@@ -3,7 +3,7 @@
 Phase 순서:
   1. 트렌드 수집 (TrendCollector)
   2. 주제 큐 생성 (TopicSelector + ContentQueue)
-  3-a. 블로그 생성 (BlogGenerator) + 제휴 링크 삽입 + 티스토리 발행
+  3-a. 블로그 생성 (BlogGenerator) + 제휴 링크 삽입 + WordPress 발행
   3-b. 릴스 캡션 생성 (ReelsGenerator) + 인스타그램 발행
   3-c. (월/수/금) 유튜브 스크립트 생성 (YouTubeGenerator) + 유튜브 발행
   4. PipelineMonitor로 상태 기록 + Slack 알림
@@ -55,6 +55,8 @@ class PipelineRunner:
             "reels_generated": 0,
             "reels_published": 0,
             "affiliate_inserted": 0,
+            "video_rendered": 0,
+            "video_render_failed": 0,
         }
 
         try:
@@ -118,6 +120,19 @@ class PipelineRunner:
                     run_id, "youtube_generate", success=True, result=yt_result
                 )
 
+            # Phase 3-d: 영상 렌더링 (스크립트 생성 후, 업로드 전 — CMP-74)
+            if run_youtube and settings.video_render_enabled:
+                render_result = self._monitor.run_step_with_retry(
+                    "video_render",
+                    self._render_pending_videos,
+                    max_retries=1,
+                )
+                content_counts["video_rendered"] = render_result.get("rendered", 0)
+                content_counts["video_render_failed"] = render_result.get("failed", 0)
+                self._monitor.record_step(
+                    run_id, "video_render", success=True, result=render_result
+                )
+
         except Exception as exc:
             logger.error("pipeline_runner.failed", error=str(exc), date=today)
             self._monitor.record_step(
@@ -169,7 +184,7 @@ class PipelineRunner:
             return {"generated": 5, "failed": 0, "published": 5, "affiliate": 4}
 
         from src.content import BlogGenerator
-        from src.upload import TistoryUploader
+        from src.upload import WordPressUploader
         from src.affiliate import AffiliateLinkInserter
 
         generator = BlogGenerator()
@@ -202,8 +217,8 @@ class PipelineRunner:
         finally:
             inserter.close()
 
-        # 티스토리 발행
-        uploader = TistoryUploader()
+        # WordPress 발행
+        uploader = WordPressUploader()
         upload_results = uploader.upload_pending(limit=settings.daily_blog_target)
         published = sum(1 for r in upload_results if r.get("success"))
 
@@ -255,3 +270,17 @@ class PipelineRunner:
         published = sum(1 for r in upload_results if r.get("success"))
 
         return {"generated": len(generated), "published": published}
+
+    def _render_pending_videos(self) -> dict:
+        """youtube_videos 중 video_file_path=null 인 draft 항목을 MP4로 렌더링 (CMP-74)"""
+        if self._dry_run:
+            logger.info("pipeline_runner.dry_run.video_render")
+            return {"rendered": 1, "failed": 0}
+
+        from src.video import VideoPipeline
+
+        pipeline = VideoPipeline(output_dir=settings.video_output_dir)
+        results = pipeline.render_pending(limit=1)
+        rendered = sum(1 for r in results if r.get("success"))
+        failed = sum(1 for r in results if not r.get("success"))
+        return {"rendered": rendered, "failed": failed}

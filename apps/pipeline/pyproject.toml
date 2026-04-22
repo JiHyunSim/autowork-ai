@@ -18,6 +18,9 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "apscheduler>=3.10.0",
+    # CMP-74: TTS + 영상 생성 파이프라인
+    "google-cloud-texttospeech>=2.17.0",
+    "Pillow>=10.4.0",
 ]
 
 [project.optional-dependencies]

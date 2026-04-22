@@ -29,8 +29,8 @@ class BlogPost(BaseModel):
     tags: list[str] = Field(default_factory=list)
     seo_score: float | None = None
     status: Literal["draft", "scheduled", "published", "failed"] = "draft"
-    tistory_post_id: str | None = None
-    tistory_url: str | None = None
+    wordpress_post_id: str | None = None
+    wordpress_url: str | None = None
     published_at: datetime | None = None
     ai_model: str = "claude-sonnet-4-6"
     generation_ms: int | None = None

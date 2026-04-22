@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from src.trend import TrendCollector, TopicSelector, ContentQueue
 from src.content import BlogGenerator, YouTubeGenerator, ReelsGenerator
-from src.upload import TistoryUploader, YouTubeUploader, InstagramUploader
+from src.upload import WordPressUploader, YouTubeUploader, InstagramUploader
 from src.affiliate import AffiliateLinkInserter
 from src.monitoring import PipelineMonitor
 from src.scheduler import PipelineScheduler
@@ -321,13 +321,13 @@ def upload_blog(
     req: UploadRequest,
     _token: str = Depends(_verify_token),
 ) -> dict:
-    """블로그 포스트 티스토리 발행 — n8n 업로드 워크플로우
+    """블로그 포스트 WordPress 발행 — n8n 업로드 워크플로우
 
-    blog_posts.status = 'draft' 항목을 읽어 티스토리 API로 발행.
-    성공 시 tistory_post_id, tistory_url 업데이트.
+    blog_posts.status = 'draft' 항목을 읽어 WordPress REST API로 발행.
+    성공 시 wordpress_post_id, wordpress_url 업데이트.
     """
     logger.info("api.upload.blog", limit=req.limit)
-    uploader = TistoryUploader()
+    uploader = WordPressUploader()
     results = uploader.upload_pending(limit=req.limit or 5)
     success = [r for r in results if r.get("success")]
     failed = [r for r in results if not r.get("success")]
@@ -542,6 +542,58 @@ def pipeline_health(
     """파이프라인 헬스 체크 — Supabase 연결 & 최근 콘텐츠 생성 여부"""
     monitor = PipelineMonitor()
     return monitor.get_pipeline_health()
+
+
+# ------------------------------------------------------------------ #
+# Phase 7: TTS + 영상 생성 엔드포인트 (CMP-74)
+# ------------------------------------------------------------------ #
+
+
+class VideoRenderRequest(BaseModel):
+    limit: Optional[int] = 1  # 렌더링할 최대 영상 수
+
+
+@router.post("/video/render")
+def render_videos(
+    req: VideoRenderRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """youtube_videos.status='draft', video_file_path=null 항목을 MP4로 렌더링 (CMP-74)
+
+    스크립트 → Google Cloud TTS 음성 → Pillow 슬라이드 → FFmpeg MP4 합성.
+    완료 시 video_file_path 저장, status=draft 유지 (YouTubeUploader가 업로드).
+    환경 요구사항: GOOGLE_APPLICATION_CREDENTIALS, ffmpeg 설치됨.
+    """
+    logger.info("api.video.render", limit=req.limit)
+    from src.video import VideoPipeline
+
+    pipeline = VideoPipeline(output_dir=settings.video_output_dir)
+    results = pipeline.render_pending(limit=req.limit or 1)
+    success = [r for r in results if r.get("success")]
+    failed = [r for r in results if not r.get("success")]
+    return {
+        "rendered": len(success),
+        "failed": len(failed),
+        "results": results,
+    }
+
+
+class VideoEstimateCostRequest(BaseModel):
+    script: str
+
+
+@router.post("/video/estimate-cost")
+def estimate_video_cost(
+    req: VideoEstimateCostRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """스크립트 기준 영상 생성 예상 비용 반환 (Google TTS Neural2 기준, API 호출 없음)"""
+    logger.info("api.video.estimate_cost")
+    from src.video.tts_generator import TTSGenerator
+
+    gen = TTSGenerator.__new__(TTSGenerator)
+    gen._voice_name = settings.google_tts_voice
+    return gen.estimate_cost(req.script)
 
 
 @router.get("/schedule")

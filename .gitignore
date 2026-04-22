@@ -48,3 +48,6 @@ htmlcov/
 
 # Railway
 railway.toml.local
+
+# Generated workspace content (not source code)
+workspace/

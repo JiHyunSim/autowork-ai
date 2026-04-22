@@ -15,11 +15,10 @@ class PipelineSettings(BaseSettings):
     youtube_refresh_token: str = Field(default="", alias="YOUTUBE_REFRESH_TOKEN")
     youtube_channel_id: str = Field(default="", alias="YOUTUBE_CHANNEL_ID")
 
-    # ---- 티스토리 API ----
-    tistory_app_id: str = Field(default="", alias="TISTORY_APP_ID")
-    tistory_secret_key: str = Field(default="", alias="TISTORY_SECRET_KEY")
-    tistory_access_token: str = Field(default="", alias="TISTORY_ACCESS_TOKEN")
-    tistory_blog_name: str = Field(default="", alias="TISTORY_BLOG_NAME")
+    # ---- WordPress REST API ----
+    wordpress_url: str = Field(default="", alias="WORDPRESS_URL")
+    wordpress_user: str = Field(default="", alias="WORDPRESS_USER")
+    wordpress_app_password: str = Field(default="", alias="WORDPRESS_APP_PASSWORD")
 
     # ---- Instagram Graph API ----
     instagram_access_token: str = Field(default="", alias="INSTAGRAM_ACCESS_TOKEN")
@@ -43,6 +42,18 @@ class PipelineSettings(BaseSettings):
 
     # ---- Slack (알림) ----
     slack_webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")
+
+    # ---- Google Cloud TTS (CMP-74) ----
+    # GOOGLE_APPLICATION_CREDENTIALS: JSON 키 파일 경로 (표준 GCP 인증)
+    # 또는 GOOGLE_API_KEY: API 키 방식
+    google_application_credentials: str = Field(
+        default="", alias="GOOGLE_APPLICATION_CREDENTIALS"
+    )
+    google_tts_voice: str = Field(default="ko-KR-Neural2-C", alias="GOOGLE_TTS_VOICE")
+
+    # ---- 영상 생성 설정 (CMP-74) ----
+    video_output_dir: str = Field(default="/tmp/youtube_videos", alias="VIDEO_OUTPUT_DIR")
+    video_render_enabled: bool = Field(default=True, alias="VIDEO_RENDER_ENABLED")
 
     # ---- 파이프라인 설정 ----
     # 일별 블로그 포스트 목표 수

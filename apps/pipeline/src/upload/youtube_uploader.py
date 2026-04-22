@@ -92,7 +92,7 @@ class YouTubeUploader:
             tags=tags if isinstance(tags, list) else [],
         )
 
-        youtube_video_id = response.get("id", "")
+        youtube_video_id = response.get("videoId", "")
         youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
 
         self._mark_published(

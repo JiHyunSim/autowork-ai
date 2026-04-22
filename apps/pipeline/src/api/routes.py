@@ -366,3 +366,72 @@ def upload_reels(
     success = [r for r in results if r.get("success")]
     failed = [r for r in results if not r.get("success")]
     return {"uploaded": len(success), "failed": len(failed), "results": results}
+
+
+# ------------------------------------------------------------------ #
+# Phase 5: 쿠팡 파트너스 제휴 링크 자동 삽입 엔드포인트
+# ------------------------------------------------------------------ #
+
+
+class AffiliateInsertRequest(BaseModel):
+    blog_post_id: str
+    content: str
+    title: str
+
+
+class AffiliateClickRequest(BaseModel):
+    affiliate_link_id: str
+
+
+@router.post("/affiliate/insert")
+def insert_affiliate_links(
+    req: AffiliateInsertRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """블로그 포스트에 쿠팡 파트너스 제휴 링크 자동 삽입 — n8n 워크플로우 5단계
+
+    1. Claude로 상품 키워드 추출
+    2. 쿠팡 파트너스 API로 관련 상품 검색
+    3. 마크다운 콘텐츠에 추천 상품 섹션 삽입
+    4. Supabase affiliate_links 테이블 저장
+    5. blog_posts.content 업데이트
+    """
+    logger.info("api.affiliate.insert", blog_post_id=req.blog_post_id)
+    inserter = AffiliateLinkInserter()
+    try:
+        result = inserter.process_blog_post(
+            blog_post_id=req.blog_post_id,
+            content=req.content,
+            title=req.title,
+        )
+        return result
+    finally:
+        inserter.close()
+
+
+@router.post("/affiliate/click")
+def track_affiliate_click(
+    req: AffiliateClickRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """제휴 링크 클릭 추적 — click_count 증가"""
+    logger.info("api.affiliate.click", affiliate_link_id=req.affiliate_link_id)
+    inserter = AffiliateLinkInserter()
+    try:
+        return inserter.track_click(req.affiliate_link_id)
+    finally:
+        inserter.close()
+
+
+@router.get("/affiliate/stats/{blog_post_id}")
+def get_affiliate_stats(
+    blog_post_id: str,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """블로그 포스트의 제휴 링크 클릭 통계 조회"""
+    logger.info("api.affiliate.stats", blog_post_id=blog_post_id)
+    inserter = AffiliateLinkInserter()
+    try:
+        return inserter.get_post_stats(blog_post_id)
+    finally:
+        inserter.close()

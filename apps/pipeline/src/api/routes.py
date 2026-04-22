@@ -12,6 +12,8 @@ from pydantic import BaseModel
 
 from src.trend import TrendCollector, TopicSelector, ContentQueue
 from src.content import BlogGenerator, YouTubeGenerator, ReelsGenerator
+from src.upload import TistoryUploader, YouTubeUploader, InstagramUploader
+from src.affiliate import AffiliateLinkInserter
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/pipeline")
@@ -301,3 +303,66 @@ def generate_reels_single(
         queue_id=req.queue_id,
     )
     return reel
+
+
+# ------------------------------------------------------------------ #
+# Phase 4: 멀티 플랫폼 자동 업로드 엔드포인트 (n8n 워크플로우 4단계)
+# ------------------------------------------------------------------ #
+
+
+class UploadRequest(BaseModel):
+    limit: Optional[int] = None  # 최대 업로드 수 (없으면 기본값 사용)
+
+
+@router.post("/upload/blog")
+def upload_blog(
+    req: UploadRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """블로그 포스트 티스토리 발행 — n8n 업로드 워크플로우
+
+    blog_posts.status = 'draft' 항목을 읽어 티스토리 API로 발행.
+    성공 시 tistory_post_id, tistory_url 업데이트.
+    """
+    logger.info("api.upload.blog", limit=req.limit)
+    uploader = TistoryUploader()
+    results = uploader.upload_pending(limit=req.limit or 5)
+    success = [r for r in results if r.get("success")]
+    failed = [r for r in results if not r.get("success")]
+    return {"uploaded": len(success), "failed": len(failed), "results": results}
+
+
+@router.post("/upload/youtube")
+def upload_youtube(
+    req: UploadRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """유튜브 영상 업로드 — n8n 업로드 워크플로우
+
+    youtube_videos.status = 'draft' 항목을 읽어 YouTube Data API로 업로드.
+    영상 파일 없으면 'scheduled' 상태로 표시.
+    """
+    logger.info("api.upload.youtube", limit=req.limit)
+    uploader = YouTubeUploader()
+    results = uploader.upload_pending(limit=req.limit or 1)
+    success = [r for r in results if r.get("success")]
+    failed = [r for r in results if not r.get("success")]
+    return {"uploaded": len(success), "failed": len(failed), "results": results}
+
+
+@router.post("/upload/reels")
+def upload_reels(
+    req: UploadRequest,
+    _token: str = Depends(_verify_token),
+) -> dict:
+    """릴스 인스타그램 발행 — n8n 업로드 워크플로우
+
+    reels_scripts.status = 'draft' 항목을 읽어 Instagram Graph API로 릴스 발행.
+    영상 URL 없으면 'scheduled' 상태로 표시.
+    """
+    logger.info("api.upload.reels", limit=req.limit)
+    uploader = InstagramUploader()
+    results = uploader.upload_pending(limit=req.limit or 1)
+    success = [r for r in results if r.get("success")]
+    failed = [r for r in results if not r.get("success")]
+    return {"uploaded": len(success), "failed": len(failed), "results": results}
